@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
@@ -117,63 +118,12 @@ struct ContentView: View {
     }
 
     private var cameraPreview: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.black)
-
-            if let preview = bridge.previewImage {
-                Image(uiImage: preview)
-                    .resizable()
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "video.slash.fill")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.secondary)
-                    Text(previewPlaceholder)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding()
-            }
-
-            VStack {
-                HStack {
-                    Label(
-                        bridge.previewImage == nil ? "PREVIEW" : "LIVE",
-                        systemImage: bridge.previewImage == nil ? "circle" : "circle.fill"
-                    )
-                    .font(.caption2.bold())
-                    .foregroundStyle(bridge.previewImage == nil ? .secondary : .red)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.68), in: Capsule())
-                    Spacer()
-                }
-                Spacer()
-                if bridge.previewImage != nil {
-                    HStack {
-                        Text(bridge.previewResolution)
-                        Spacer()
-                        Text(String(format: "%.1f fps", bridge.previewFPS))
-                    }
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(.black.opacity(0.6))
-                }
-            }
-            .padding(10)
-        }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        CameraPreview(
+            image: bridge.previewImage,
+            resolution: bridge.previewResolution,
+            framesPerSecond: bridge.previewFPS,
+            placeholder: previewPlaceholder
         )
-        .clipped()
     }
 
     private var trackingCard: some View {
@@ -336,6 +286,97 @@ struct ContentView: View {
         case .failed: return .red
         case .disconnected: return .gray
         }
+    }
+}
+
+private struct CameraPreview: View {
+    let image: UIImage?
+    let resolution: String
+    let framesPerSecond: Double
+    let placeholder: String
+
+    private let cornerRadius: CGFloat = 22
+
+    var body: some View {
+        ZStack {
+            previewBackground
+            previewContent
+            previewChrome
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .overlay(previewBorder)
+        .clipShape(previewShape)
+    }
+
+    private var previewShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    private var previewBackground: some View {
+        previewShape.fill(Color.black)
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if let image {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "video.slash.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text(placeholder)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+        }
+    }
+
+    private var previewChrome: some View {
+        VStack {
+            HStack {
+                liveBadge
+                Spacer()
+            }
+            Spacer()
+            if image != nil {
+                statsBar
+            }
+        }
+        .padding(10)
+    }
+
+    private var liveBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: image == nil ? "circle" : "circle.fill")
+            Text(image == nil ? "PREVIEW" : "LIVE")
+        }
+        .font(.caption2.bold())
+        .foregroundStyle(image == nil ? Color.secondary : Color.red)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.68), in: Capsule())
+    }
+
+    private var statsBar: some View {
+        HStack {
+            Text(resolution)
+            Spacer()
+            Text(String(format: "%.1f fps", framesPerSecond))
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(Color.white.opacity(0.85))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.black.opacity(0.6))
+    }
+
+    private var previewBorder: some View {
+        previewShape.stroke(Color.white.opacity(0.1), lineWidth: 1)
     }
 }
 
