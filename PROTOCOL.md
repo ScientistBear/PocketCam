@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "pocketcam_bridge"
+version = "0.1.0"
+name = "PocketCam Bridge"
+tagline = "Drive and record a Blender camera with an ARKit iPhone"
+maintainer = "PocketCam Bridge contributors"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:MIT",
+]
+
+[permissions]
+network = "Receive iPhone motion data over the local network"
+
