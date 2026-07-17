@@ -14,6 +14,9 @@ final class AppModel: ObservableObject {
     @Published var movementScale = 1.0
     @Published var smoothing = 0.18
     @Published var lensMM = 18.0
+    @Published var previewEnabled = true
+    @Published var previewRate = 8.0
+    @Published var previewWidth = 360
     @Published var sendRate = 60.0 {
         didSet { tracker.sendRate = sendRate }
     }
@@ -36,6 +39,9 @@ final class AppModel: ObservableObject {
                 self.movementScale = status.movementScale
                 self.smoothing = status.smoothing
                 self.lensMM = status.lensMM
+                self.previewEnabled = status.previewEnabled
+                self.previewRate = status.previewFPS
+                self.previewWidth = status.previewWidth
                 if let camera = status.selectedCamera {
                     self.selectedCamera = camera
                 }
@@ -74,7 +80,10 @@ final class AppModel: ObservableObject {
         bridge.sendSettings(
             movementScale: movementScale,
             smoothing: smoothing,
-            lensMM: lensMM
+            lensMM: lensMM,
+            previewEnabled: previewEnabled,
+            previewFPS: previewRate,
+            previewWidth: previewWidth
         )
     }
 

@@ -41,6 +41,10 @@ struct BridgeStatus: Decodable, Equatable {
     var movementScale: Double
     var smoothing: Double
     var lensMM: Double
+    var previewEnabled: Bool
+    var previewFPS: Double
+    var previewWidth: Int
+    var previewError: String
     var message: String
 
     static let empty = BridgeStatus(
@@ -51,6 +55,10 @@ struct BridgeStatus: Decodable, Equatable {
         movementScale: 1.0,
         smoothing: 0.18,
         lensMM: 18.0,
+        previewEnabled: true,
+        previewFPS: 8.0,
+        previewWidth: 360,
+        previewError: "",
         message: ""
     )
 
@@ -62,6 +70,10 @@ struct BridgeStatus: Decodable, Equatable {
         case movementScale = "movement_scale"
         case smoothing
         case lensMM = "lens_mm"
+        case previewEnabled = "preview_enabled"
+        case previewFPS = "preview_fps"
+        case previewWidth = "preview_width"
+        case previewError = "preview_error"
         case message
     }
 
@@ -73,6 +85,10 @@ struct BridgeStatus: Decodable, Equatable {
         movementScale: Double,
         smoothing: Double,
         lensMM: Double,
+        previewEnabled: Bool,
+        previewFPS: Double,
+        previewWidth: Int,
+        previewError: String,
         message: String
     ) {
         self.recording = recording
@@ -82,6 +98,10 @@ struct BridgeStatus: Decodable, Equatable {
         self.movementScale = movementScale
         self.smoothing = smoothing
         self.lensMM = lensMM
+        self.previewEnabled = previewEnabled
+        self.previewFPS = previewFPS
+        self.previewWidth = previewWidth
+        self.previewError = previewError
         self.message = message
     }
 
@@ -94,6 +114,10 @@ struct BridgeStatus: Decodable, Equatable {
         movementScale = try values.decodeIfPresent(Double.self, forKey: .movementScale) ?? 1.0
         smoothing = try values.decodeIfPresent(Double.self, forKey: .smoothing) ?? 0.18
         lensMM = try values.decodeIfPresent(Double.self, forKey: .lensMM) ?? 18.0
+        previewEnabled = try values.decodeIfPresent(Bool.self, forKey: .previewEnabled) ?? true
+        previewFPS = try values.decodeIfPresent(Double.self, forKey: .previewFPS) ?? 8.0
+        previewWidth = try values.decodeIfPresent(Int.self, forKey: .previewWidth) ?? 360
+        previewError = try values.decodeIfPresent(String.self, forKey: .previewError) ?? ""
         message = try values.decodeIfPresent(String.self, forKey: .message) ?? ""
     }
 }

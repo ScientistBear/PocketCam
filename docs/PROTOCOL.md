@@ -25,7 +25,7 @@ target = blender_camera_start * scale_translation(delta)
 ### Hello
 
 ```json
-{"type":"hello","protocol":1,"client":"PocketCam iOS","device":"My iPhone","app_version":"0.1.0"}
+{"type":"hello","protocol":1,"client":"PocketCam iOS","device":"My iPhone","app_version":"0.2.0"}
 ```
 
 ### Pose
@@ -39,7 +39,7 @@ Pose messages are coalesced by the server. If Blender's main thread is busy, it 
 ### Settings
 
 ```json
-{"type":"settings","movement_scale":1.0,"smoothing":0.18,"lens_mm":24.0}
+{"type":"settings","movement_scale":1.0,"smoothing":0.18,"lens_mm":24.0,"preview_enabled":true,"preview_fps":8.0,"preview_width":360}
 ```
 
 ### Camera selection
@@ -78,9 +78,21 @@ Command values in v1 are `recenter`, `record_start`, and `record_stop`.
   "movement_scale":1.0,
   "smoothing":0.18,
   "lens_mm":24.0,
+  "preview_enabled":true,
+  "preview_fps":8.0,
+  "preview_width":360,
+  "preview_error":"",
   "message":"Handshake accepted"
 }
 ```
+
+### Preview
+
+```json
+{"type":"preview","seq":12,"timestamp":1720000000.0,"width":360,"height":203,"format":"jpeg","data":"/9j/4AAQ..."}
+```
+
+The `data` field is a base64-encoded JPEG captured from the selected Blender camera using the active 3D View's shading settings. Preview packets are coalesced on Blender's background sender so a slow phone receives the newest available frame instead of a stale queue.
 
 ### Pong
 
@@ -90,7 +102,7 @@ Command values in v1 are `recenter`, `record_start`, and `record_stop`.
 
 ## Limits and trust model
 
-- Maximum line size: 256 KiB
+- Maximum phone-to-Blender line size: 256 KiB
 - One phone client at a time
 - No authentication or encryption in v1
 - Intended only for a trusted private LAN

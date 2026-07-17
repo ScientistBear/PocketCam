@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from datetime import datetime
 from typing import Any
@@ -11,13 +12,14 @@ from bpy.props import BoolProperty, FloatProperty, IntProperty, PointerProperty,
 from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Matrix, Quaternion, Vector
 
+from .preview import PreviewCapture
 from .server import PROTOCOL_VERSION, PoseServer, discover_local_ip
 
 
 bl_info = {
     "name": "PocketCam Bridge",
     "author": "Open-source prototype created with Codex",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > PocketCam",
     "description": "Drive and record a Blender camera from an ARKit iPhone",
@@ -26,6 +28,7 @@ bl_info = {
 
 
 _server: PoseServer | None = None
+_preview = PreviewCapture()
 _state: dict[str, Any] = {
     "reference_pose": None,
     "camera_start": None,
@@ -39,6 +42,12 @@ _state: dict[str, Any] = {
     "last_record_frame": None,
     "take_name": "",
     "last_status_signature": None,
+    "pose_packets": 0,
+    "last_pose_sequence": 0,
+    "last_preview_clock": 0.0,
+    "preview_sequence": 0,
+    "preview_frames_sent": 0,
+    "reported_preview_error": "",
 }
 
 
@@ -66,6 +75,25 @@ class PocketCamSettings(PropertyGroup):
     )
     lens_mm: FloatProperty(name="Lens", default=18.0, min=1.0, max=300.0, subtype="DISTANCE")
     use_phone_lens: BoolProperty(name="Use Phone Lens Control", default=True)
+    preview_enabled: BoolProperty(
+        name="Stream Camera Preview",
+        description="Send a low-resolution viewport preview to the connected iPhone",
+        default=True,
+    )
+    preview_fps: FloatProperty(
+        name="Preview Rate",
+        description="Camera preview frames sent to the phone each second",
+        default=8.0,
+        min=1.0,
+        max=15.0,
+    )
+    preview_width: IntProperty(
+        name="Preview Width",
+        description="Horizontal resolution of the phone preview",
+        default=360,
+        min=160,
+        max=640,
+    )
     status: StringProperty(name="Status", default="Stopped")
     address: StringProperty(name="Address", default="")
 
@@ -86,7 +114,19 @@ def _selected_camera(scene: bpy.types.Scene, settings: PocketCamSettings) -> bpy
         scene.collection.objects.link(camera)
         scene.camera = camera
         settings.camera = camera
+    elif scene.camera is not camera:
+        # The panel selection is the camera users expect to see in camera view.
+        # v0.1 moved the pointer-selected object but could leave another camera
+        # active in the scene, making live tracking appear completely broken.
+        scene.camera = camera
     return camera
+
+
+def _tag_view3d_redraw() -> None:
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
 
 
 def _pose_matrix(payload: dict[str, Any]) -> Matrix | None:
@@ -134,6 +174,8 @@ def _apply_pose(scene: bpy.types.Scene, settings: PocketCamSettings, payload: di
         settings.status = "Invalid pose packet"
         return
     _state["latest_pose"] = pose.copy()
+    _state["pose_packets"] = int(_state["pose_packets"]) + 1
+    _state["last_pose_sequence"] = int(payload.get("seq", 0) or 0)
 
     if _state["pending_recenter"] or _state["reference_pose"] is None:
         _reset_tracking_reference(camera, pose)
@@ -165,8 +207,11 @@ def _apply_pose(scene: bpy.types.Scene, settings: PocketCamSettings, payload: di
         current_rotation,
         Vector((1.0, 1.0, 1.0)),
     )
+    camera.update_tag(refresh={"OBJECT"})
     if settings.use_phone_lens:
         camera.data.lens = float(settings.lens_mm)
+        camera.data.update_tag()
+    _tag_view3d_redraw()
 
     if _state["recording"]:
         _record_keyframe(scene, camera)
@@ -247,6 +292,10 @@ def _send_status(scene: bpy.types.Scene, force: bool = False, message: str = "")
         "movement_scale": float(settings.movement_scale),
         "smoothing": float(settings.smoothing),
         "lens_mm": float(settings.lens_mm),
+        "preview_enabled": bool(settings.preview_enabled),
+        "preview_fps": float(settings.preview_fps),
+        "preview_width": int(settings.preview_width),
+        "preview_error": _preview.last_error,
         "message": message,
     }
     signature = repr(payload)
@@ -264,11 +313,18 @@ def _handle_event(scene: bpy.types.Scene, settings: PocketCamSettings, kind: str
         settings.status = f"Connected: {payload.get('host', 'iPhone')}"
         _state["pending_recenter"] = True
         _state["last_status_signature"] = None
+        _state["pose_packets"] = 0
+        _state["last_pose_sequence"] = 0
+        _state["last_preview_clock"] = 0.0
+        _state["preview_sequence"] = 0
+        _state["preview_frames_sent"] = 0
+        _state["reported_preview_error"] = ""
         _send_status(scene, force=True, message="Connected to Blender")
     elif kind == "client_disconnected":
         if _state["recording"]:
             _stop_recording(scene, settings)
         settings.status = "Listening - iPhone disconnected"
+        _preview.close()
     elif kind == "hello":
         _send_status(scene, force=True, message="Handshake accepted")
     elif kind == "ping":
@@ -284,6 +340,12 @@ def _handle_event(scene: bpy.types.Scene, settings: PocketCamSettings, kind: str
                 settings.smoothing = max(0.0, min(0.95, float(payload["smoothing"])))
             if "lens_mm" in payload:
                 settings.lens_mm = max(1.0, min(300.0, float(payload["lens_mm"])))
+            if "preview_enabled" in payload:
+                settings.preview_enabled = bool(payload["preview_enabled"])
+            if "preview_fps" in payload:
+                settings.preview_fps = max(1.0, min(15.0, float(payload["preview_fps"])))
+            if "preview_width" in payload:
+                settings.preview_width = max(160, min(640, int(payload["preview_width"])))
         except (TypeError, ValueError):
             settings.status = "Ignored invalid phone settings"
         _send_status(scene, force=True)
@@ -318,6 +380,30 @@ def _timer_tick() -> float:
         pose = _server.pop_latest_pose()
         if pose is not None:
             _apply_pose(scene, settings, pose)
+        if _server.client_connected and settings.preview_enabled:
+            now = time.perf_counter()
+            interval = 1.0 / max(1.0, float(settings.preview_fps))
+            if now - float(_state["last_preview_clock"]) >= interval:
+                _state["last_preview_clock"] = now
+                camera = _selected_camera(scene, settings)
+                frame = _preview.capture(scene, camera, settings.preview_width) if camera else None
+                if frame is not None:
+                    _state["preview_sequence"] = int(_state["preview_sequence"]) + 1
+                    if _server.send_preview(
+                        {
+                            "type": "preview",
+                            "seq": int(_state["preview_sequence"]),
+                            "timestamp": time.time(),
+                            "width": frame.width,
+                            "height": frame.height,
+                            "format": "jpeg",
+                            "data": base64.b64encode(frame.jpeg).decode("ascii"),
+                        }
+                    ):
+                        _state["preview_frames_sent"] = int(_state["preview_frames_sent"]) + 1
+                if _preview.last_error != _state["reported_preview_error"]:
+                    _state["reported_preview_error"] = _preview.last_error
+                    _send_status(scene, force=True)
         if _server.client_connected and not _state["recording"] and settings.status.startswith("Listening"):
             settings.status = "Connected"
         return 0.01
@@ -340,6 +426,7 @@ class POCKETCAM_OT_start_server(Operator):
             return {"CANCELLED"}
         if _server is not None:
             _server.stop()
+        _preview.close()
         _server = PoseServer(port=settings.port)
         _server.start()
         address = discover_local_ip()
@@ -362,6 +449,7 @@ class POCKETCAM_OT_stop_server(Operator):
         if _server is not None:
             _server.stop()
             _server = None
+        _preview.close()
         if settings is not None:
             settings.status = "Stopped"
         return {"FINISHED"}
@@ -449,6 +537,16 @@ class POCKETCAM_PT_panel(Panel):
         if settings.use_phone_lens:
             layout.prop(settings, "lens_mm")
 
+        preview_box = layout.box()
+        preview_box.prop(settings, "preview_enabled")
+        if settings.preview_enabled:
+            preview_box.prop(settings, "preview_fps")
+            preview_box.prop(settings, "preview_width")
+            preview_box.label(text=f"Poses received: {_state['pose_packets']}", icon="TRACKING")
+            preview_box.label(text=f"Frames sent: {_state['preview_frames_sent']}", icon="RENDER_STILL")
+            if _preview.last_error:
+                preview_box.label(text=_preview.last_error, icon="ERROR")
+
         controls = layout.row(align=True)
         controls.operator("pocketcam.recenter", icon="ORIENTATION_GIMBAL")
         if _state["recording"]:
@@ -482,6 +580,7 @@ def unregister() -> None:
     if _server is not None:
         _server.stop()
         _server = None
+    _preview.close()
     if bpy.app.timers.is_registered(_timer_tick):
         bpy.app.timers.unregister(_timer_tick)
     if hasattr(bpy.types.Scene, "pocketcam_settings"):

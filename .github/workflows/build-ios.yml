@@ -8,6 +8,10 @@ on:
     paths:
       - "ios/**"
       - ".github/workflows/build-ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/build-ios.yml"
 
 permissions:
   contents: read

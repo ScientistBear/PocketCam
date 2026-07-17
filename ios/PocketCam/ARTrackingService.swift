@@ -7,6 +7,8 @@ final class ARTrackingService: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var isRunning = false
     @Published private(set) var trackingDescription = "Stopped"
     @Published private(set) var trackingIsGood = false
+    @Published private(set) var poseFPS = 0.0
+    @Published private(set) var poseCount: UInt64 = 0
 
     let session = ARSession()
     var onPose: ((PoseSample) -> Void)?
@@ -16,6 +18,8 @@ final class ARTrackingService: NSObject, ObservableObject, ARSessionDelegate {
     private var sequence: UInt64 = 0
     private var lastSentTimestamp: TimeInterval = 0
     private var lastTrackingDescription = ""
+    private var rateWindowStart: TimeInterval = 0
+    private var rateWindowFrames = 0
 
     override init() {
         super.init()
@@ -33,11 +37,15 @@ final class ARTrackingService: NSObject, ObservableObject, ARSessionDelegate {
         configuration.isAutoFocusEnabled = true
         sequence = 0
         lastSentTimestamp = 0
+        rateWindowStart = 0
+        rateWindowFrames = 0
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         DispatchQueue.main.async {
             self.isRunning = true
             self.trackingDescription = "Initializing"
             self.trackingIsGood = false
+            self.poseFPS = 0
+            self.poseCount = 0
         }
     }
 
@@ -79,6 +87,21 @@ final class ARTrackingService: NSObject, ObservableObject, ARSessionDelegate {
                 tracking: quality.text
             )
         )
+        rateWindowFrames += 1
+        if rateWindowStart == 0 {
+            rateWindowStart = frame.timestamp
+        }
+        let elapsed = frame.timestamp - rateWindowStart
+        if elapsed >= 0.75 {
+            let measuredFPS = Double(rateWindowFrames) / elapsed
+            let count = sequence
+            rateWindowFrames = 0
+            rateWindowStart = frame.timestamp
+            DispatchQueue.main.async {
+                self.poseFPS = measuredFPS
+                self.poseCount = count
+            }
+        }
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {

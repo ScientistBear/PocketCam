@@ -67,19 +67,21 @@ class PoseServerTests(unittest.TestCase):
             }
         )
         deadline = time.time() + 2.0
-        pose = None
-        # The network thread may expose packet 1 before packet 2 reaches it. Keep
-        # sampling until the newest sequence arrives; Blender does the same at
-        # each timer tick and therefore never accumulates a pose backlog.
-        while time.time() < deadline:
-            candidate = self.server.pop_latest_pose()
-            if candidate is not None:
-                pose = candidate
-                if pose.get("seq") == 2:
-                    break
-            time.sleep(0.01)
-        self.assertIsNotNone(pose)
-        self.assertEqual(pose["seq"], 2)
+        first_pose = None
+        while first_pose is None and time.time() < deadline:
+            first_pose = self.server.pop_latest_pose()
+            if first_pose is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(first_pose)
+        self.assertEqual(first_pose["seq"], 1)
+
+        latest_pose = None
+        while latest_pose is None and time.time() < deadline:
+            latest_pose = self.server.pop_latest_pose()
+            if latest_pose is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(latest_pose)
+        self.assertEqual(latest_pose["seq"], 2)
 
         self.assertTrue(self.server.send_json({"type": "status", "recording": False}))
         line = self.client.recv(4096).split(b"\n", 1)[0]
@@ -91,6 +93,25 @@ class PoseServerTests(unittest.TestCase):
         self.client.sendall(b"not-json\n")
         event = self.wait_for_event("protocol_error")
         self.assertIn("Invalid JSON", event.payload["message"])
+
+    def test_preview_packet_is_sent_by_background_sender(self) -> None:
+        self.wait_for_event("client_connected")
+        self.assertTrue(
+            self.server.send_preview(
+                {
+                    "type": "preview",
+                    "seq": 7,
+                    "width": 4,
+                    "height": 2,
+                    "format": "jpeg",
+                    "data": "preview-bytes",
+                }
+            )
+        )
+        line = self.client.recv(4096).split(b"\n", 1)[0]
+        reply = json.loads(line.decode("utf-8"))
+        self.assertEqual(reply["type"], "preview")
+        self.assertEqual(reply["seq"], 7)
 
 
 if __name__ == "__main__":

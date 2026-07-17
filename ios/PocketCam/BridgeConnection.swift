@@ -7,10 +7,17 @@ final class BridgeConnection: ObservableObject {
     @Published private(set) var state: BridgeConnectionState = .disconnected
     @Published private(set) var serverStatus: BridgeStatus = .empty
     @Published private(set) var lastError = ""
+    @Published private(set) var previewImage: UIImage?
+    @Published private(set) var previewFPS = 0.0
+    @Published private(set) var previewFrameCount: UInt64 = 0
+    @Published private(set) var previewResolution = ""
 
     private let queue = DispatchQueue(label: "PocketCam.Network", qos: .userInteractive)
     private var connection: NWConnection?
     private var receiveBuffer = Data()
+    private var previewWindowStart = ProcessInfo.processInfo.systemUptime
+    private var previewWindowFrames = 0
+    private var receivedPreviewSequence: UInt64 = 0
 
     func connect(host: String, port: UInt16) {
         let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,6 +35,9 @@ final class BridgeConnection: ObservableObject {
             guard let self else { return }
             self.connection?.cancel()
             self.receiveBuffer.removeAll(keepingCapacity: true)
+            self.previewWindowStart = ProcessInfo.processInfo.systemUptime
+            self.previewWindowFrames = 0
+            self.receivedPreviewSequence = 0
 
             let parameters = NWParameters.tcp
             parameters.prohibitExpensivePaths = false
@@ -55,6 +65,10 @@ final class BridgeConnection: ObservableObject {
             self.publish {
                 self.state = .disconnected
                 self.serverStatus = .empty
+                self.previewImage = nil
+                self.previewFPS = 0
+                self.previewFrameCount = 0
+                self.previewResolution = ""
             }
         }
     }
@@ -74,12 +88,22 @@ final class BridgeConnection: ObservableObject {
         sendJSON(["type": "command", "command": command])
     }
 
-    func sendSettings(movementScale: Double, smoothing: Double, lensMM: Double) {
+    func sendSettings(
+        movementScale: Double,
+        smoothing: Double,
+        lensMM: Double,
+        previewEnabled: Bool,
+        previewFPS: Double,
+        previewWidth: Int
+    ) {
         sendJSON([
             "type": "settings",
             "movement_scale": movementScale,
             "smoothing": smoothing,
-            "lens_mm": lensMM
+            "lens_mm": lensMM,
+            "preview_enabled": previewEnabled,
+            "preview_fps": previewFPS,
+            "preview_width": previewWidth
         ])
     }
 
@@ -97,7 +121,7 @@ final class BridgeConnection: ObservableObject {
             "protocol": 1,
             "client": "PocketCam iOS",
             "device": UIDevice.current.name,
-            "app_version": "0.1.0"
+            "app_version": "0.2.0"
         ])
     }
 
@@ -175,6 +199,41 @@ final class BridgeConnection: ObservableObject {
                         self.lastError = status.message
                     }
                 }
+            } else if type == "preview" {
+                consumePreview(envelope)
+            }
+        }
+    }
+
+    private func consumePreview(_ envelope: [String: Any]) {
+        guard (envelope["format"] as? String) == "jpeg",
+              let encoded = envelope["data"] as? String,
+              let jpeg = Data(base64Encoded: encoded),
+              let sourceImage = UIImage(data: jpeg) else {
+            return
+        }
+        let image = sourceImage.preparingForDisplay() ?? sourceImage
+        let width = (envelope["width"] as? NSNumber)?.intValue ?? Int(image.size.width)
+        let height = (envelope["height"] as? NSNumber)?.intValue ?? Int(image.size.height)
+        let sequence = (envelope["seq"] as? NSNumber)?.uint64Value ?? (receivedPreviewSequence + 1)
+        receivedPreviewSequence = sequence
+
+        previewWindowFrames += 1
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = now - previewWindowStart
+        var measuredFPS: Double?
+        if elapsed >= 0.75 {
+            measuredFPS = Double(previewWindowFrames) / elapsed
+            previewWindowFrames = 0
+            previewWindowStart = now
+        }
+
+        publish {
+            self.previewImage = image
+            self.previewFrameCount = sequence
+            self.previewResolution = "\(width)×\(height)"
+            if let measuredFPS {
+                self.previewFPS = measuredFPS
             }
         }
     }

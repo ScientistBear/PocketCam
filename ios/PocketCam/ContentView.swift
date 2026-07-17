@@ -18,6 +18,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     hero
+                    cameraPreview
                     connectionCard
                     trackingCard
                     cameraCard
@@ -38,6 +39,9 @@ struct ContentView: View {
         .onChange(of: model.movementScale) { _, _ in model.pushSettings() }
         .onChange(of: model.smoothing) { _, _ in model.pushSettings() }
         .onChange(of: model.lensMM) { _, _ in model.pushSettings() }
+        .onChange(of: model.previewEnabled) { _, _ in model.pushSettings() }
+        .onChange(of: model.previewRate) { _, _ in model.pushSettings() }
+        .onChange(of: model.previewWidth) { _, _ in model.pushSettings() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active && tracker.isRunning {
                 tracker.stop()
@@ -112,6 +116,66 @@ struct ContentView: View {
         }
     }
 
+    private var cameraPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.black)
+
+            if let preview = bridge.previewImage {
+                Image(uiImage: preview)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text(previewPlaceholder)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+            }
+
+            VStack {
+                HStack {
+                    Label(
+                        bridge.previewImage == nil ? "PREVIEW" : "LIVE",
+                        systemImage: bridge.previewImage == nil ? "circle" : "circle.fill"
+                    )
+                    .font(.caption2.bold())
+                    .foregroundStyle(bridge.previewImage == nil ? .secondary : .red)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.68), in: Capsule())
+                    Spacer()
+                }
+                Spacer()
+                if bridge.previewImage != nil {
+                    HStack {
+                        Text(bridge.previewResolution)
+                        Spacer()
+                        Text(String(format: "%.1f fps", bridge.previewFPS))
+                    }
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.6))
+                }
+            }
+            .padding(10)
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
+        .clipped()
+    }
+
     private var trackingCard: some View {
         Card(title: "Motion Capture", icon: "gyroscope") {
             VStack(spacing: 12) {
@@ -119,7 +183,9 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(tracker.trackingDescription)
                             .font(.headline)
-                        Text("ARKit 6DoF pose at \(Int(model.sendRate)) fps")
+                        Text(tracker.poseCount > 0
+                             ? String(format: "Sending %.1f pose fps", tracker.poseFPS)
+                             : "ARKit 6DoF pose at \(Int(model.sendRate)) fps")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -213,8 +279,45 @@ struct ContentView: View {
                     range: 15.0...60.0,
                     step: 15.0
                 )
+
+                Divider()
+
+                Toggle("Stream Blender camera view", isOn: $model.previewEnabled)
+                    .tint(.cyan)
+                if model.previewEnabled {
+                    ValueSlider(
+                        title: "Preview rate",
+                        valueText: "\(Int(model.previewRate)) fps",
+                        value: $model.previewRate,
+                        range: 2.0...12.0,
+                        step: 1.0
+                    )
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Preview resolution")
+                            .font(.subheadline)
+                        Picker("Preview resolution", selection: $model.previewWidth) {
+                            Text("240p").tag(240)
+                            Text("360p").tag(360)
+                            Text("480p").tag(480)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
             }
         }
+    }
+
+    private var previewPlaceholder: String {
+        if !bridge.state.isConnected {
+            return "Connect to Blender to see its camera"
+        }
+        if !model.previewEnabled {
+            return "Camera preview is turned off"
+        }
+        if !bridge.serverStatus.previewError.isEmpty {
+            return bridge.serverStatus.previewError
+        }
+        return "Waiting for Blender camera frames…"
     }
 
     private var footer: some View {

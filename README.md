@@ -2,9 +2,9 @@
 
 PocketCam Bridge is a free, local-network virtual camera controller for Blender. An iPhone runs ARKit world tracking and streams its six-degree-of-freedom pose to a Blender add-on, where the motion can be previewed and recorded as camera keyframes.
 
-This first release is aimed at handheld/found-footage camera work. It includes the useful core of a virtual camera app without an account, subscription, or cloud service.
+This project is aimed at handheld/found-footage camera work. It includes the useful core of a virtual camera app without an account, subscription, or cloud service.
 
-## What works in v0.1
+## What works in v0.2
 
 - ARKit position and rotation tracking at 15, 30, 45, or 60 updates per second
 - Direct TCP connection over your private Wi-Fi; no relay or cloud account
@@ -15,23 +15,25 @@ This first release is aimed at handheld/found-footage camera work. It includes t
 - Start and stop Blender takes from the phone
 - New Blender Actions for every recorded take, sampled at the scene frame rate
 - Correct world-space control for parented cameras
-
-The current version does **not** stream the Blender viewport back to the phone. Keep the Blender viewport visible on the PC while operating the camera. Viewport streaming is the main planned follow-up.
+- Live Blender camera viewport streamed back to the phone as low-latency JPEG frames
+- Adjustable preview rate and resolution with stale-frame coalescing
+- Live pose and preview frame-rate diagnostics on both devices
+- Automatic activation of the camera selected in the PocketCam panel
 
 ## The two parts
 
 ```text
 iPhone (ARKit pose)  -->  private Wi-Fi  -->  Blender add-on  -->  camera + keyframes
-       controls      <--     TCP JSON     <--  status/cameras
+ live camera monitor <--     TCP JSON     <--  JPEG viewport frames
 ```
 
-Everything stays on the local network. The v0.1 protocol is intentionally simple and is not encrypted, so use it only on a trusted private network.
+Everything stays on the local network. The protocol is intentionally simple and is not encrypted, so use it only on a trusted private network.
 
 ## Fast setup
 
 ### 1. Install the Blender add-on
 
-1. Download `PocketCam-Bridge-Blender-Addon-v0.1.0.zip`.
+1. Download `PocketCam-Bridge-Blender-Addon-v0.2.0.zip`.
 2. In Blender, open **Edit > Preferences > Get Extensions**.
 3. Use the menu in the upper-right, choose **Install from Disk**, select the zip, and approve its local-network permission.
 4. In a 3D View, press **N** and open the **PocketCam** tab.
@@ -59,8 +61,9 @@ An unsigned IPA cannot be installed directly. Apple says a free Personal Team pr
 2. Enter the Blender IP and port in PocketCam, then tap **Connect to Blender**.
 3. Accept the camera and local-network permission prompts.
 4. Tap **Start Tracking** and wait for the green `Tracking` indicator.
-5. Hold the phone in the starting pose and tap **Recenter**.
-6. Tap **Record Take**, perform the move, then tap **Stop Take**.
+5. Confirm that the Blender camera appears in the live monitor and the pose counter increases.
+6. Hold the phone in the starting pose and tap **Recenter**.
+7. Tap **Record Take**, perform the move, then tap **Stop Take**.
 
 The take is stored as a new `PocketCam_Take_...` Action on the camera, with a companion lens Action on the camera data block. Save the `.blend` file after a take you want to keep.
 
@@ -70,6 +73,7 @@ The take is stored as a new `PocketCam_Take_...` Action on the camera, with a co
 - Smoothing: `10%` to `25%`
 - Lens: `18 mm` to `28 mm`
 - Send rate: `60 fps`; use `30 fps` if the network is congested
+- Preview: `8 fps` at `360` width; lower either setting on congested Wi-Fi
 - Blender scene rate: `24` or `30 fps`
 
 Give ARKit visible detail and steady lighting. Blank walls, darkness, severe motion blur, or covering the cameras can reduce tracking quality. For a believable handheld feel, use light smoothing and keep some natural translation rather than rotating from one fixed point.
@@ -98,10 +102,18 @@ Give ARKit visible detail and steady lighting. Blank walls, darkness, severe mot
 - Reduce the send rate to 30 fps on poor Wi-Fi.
 - A crowded 2.4 GHz network can be much less consistent than 5/6 GHz Wi-Fi.
 
+**The camera monitor is blank**
+
+- Keep at least one 3D View open in Blender; the preview uses its shading settings.
+- Enable **Stream Camera Preview** in the Blender PocketCam panel and on the phone.
+- Check the PocketCam panel's `Poses received` and `Frames sent` counters.
+- Lower preview resolution and rate if pose movement pauses on slow Wi-Fi.
+
 ## Validation performed
 
-- TCP protocol unit tests cover handshakes, pose coalescing, replies, and malformed packets.
-- A Blender 5.0.1 headless smoke test covers registration, parented camera motion, lens control, Action creation, and recorded keyframes.
+- TCP protocol unit tests cover handshakes, pose coalescing, asynchronous preview delivery, replies, and malformed packets.
+- Blender 5.0.1 smoke tests cover the real TCP-to-camera path, active-camera selection, parented motion, lens control, Action creation, and recorded keyframes.
+- A normal-UI Blender GPU test captures the camera viewport at 320x180 and verifies the resulting JPEG.
 - The iOS plist and project specification are machine-validated on Windows. The Swift app must be compiled on macOS/Xcode; the included workflow performs that build once placed in GitHub.
 
 ## Project layout
