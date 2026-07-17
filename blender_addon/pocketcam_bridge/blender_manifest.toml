@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "pocketcam_bridge"
-version = "0.1.0"
+version = "0.2.0"
 name = "PocketCam Bridge"
 tagline = "Drive and record a Blender camera with an ARKit iPhone"
 maintainer = "PocketCam Bridge contributors"

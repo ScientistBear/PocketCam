@@ -57,8 +57,13 @@ class PoseServer:
         self._stop = threading.Event()
         self._events: queue.Queue[ServerEvent] = queue.Queue(maxsize=256)
         self._pose_lock = threading.Lock()
+        self._initial_pose: dict[str, Any] | None = None
         self._latest_pose: dict[str, Any] | None = None
-        self._send_lock = threading.Lock()
+        self._pose_started = False
+        self._control_outbound: queue.Queue[bytes] = queue.Queue(maxsize=64)
+        self._preview_lock = threading.Lock()
+        self._latest_preview: bytes | None = None
+        self._sender_thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
 
     @property
@@ -111,6 +116,10 @@ class PoseServer:
 
     def pop_latest_pose(self) -> dict[str, Any] | None:
         with self._pose_lock:
+            if self._initial_pose is not None:
+                pose = self._initial_pose
+                self._initial_pose = None
+                return pose
             pose = self._latest_pose
             self._latest_pose = None
             return pose
@@ -125,20 +134,74 @@ class PoseServer:
         return events
 
     def send_json(self, payload: dict[str, Any]) -> bool:
-        encoded = (
+        """Queue a small status/control packet without blocking Blender's main thread."""
+
+        encoded = self._encode(payload)
+        with self._state_lock:
+            connected = self._client is not None
+        if not connected:
+            return False
+        try:
+            self._control_outbound.put_nowait(encoded)
+        except queue.Full:
+            # Control traffic is tiny and rare. If a broken client stops reading,
+            # keep recent state instead of ever stalling Blender's UI thread.
+            try:
+                self._control_outbound.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._control_outbound.put_nowait(encoded)
+            except queue.Full:
+                return False
+        return True
+
+    def send_preview(self, payload: dict[str, Any]) -> bool:
+        """Coalesce camera frames so a slow phone never builds a stale backlog."""
+
+        encoded = self._encode(payload)
+        with self._state_lock:
+            connected = self._client is not None
+        if not connected:
+            return False
+        with self._preview_lock:
+            self._latest_preview = encoded
+        return True
+
+    @staticmethod
+    def _encode(payload: dict[str, Any]) -> bytes:
+        return (
             json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             + b"\n"
         )
-        with self._send_lock:
+
+    def _clear_outbound(self) -> None:
+        while True:
+            try:
+                self._control_outbound.get_nowait()
+            except queue.Empty:
+                break
+        with self._preview_lock:
+            self._latest_preview = None
+
+    def _sender(self, client: socket.socket) -> None:
+        while not self._stop.is_set():
             with self._state_lock:
-                client = self._client
-            if client is None:
-                return False
+                if self._client is not client:
+                    return
+            encoded: bytes | None = None
+            try:
+                encoded = self._control_outbound.get(timeout=0.01)
+            except queue.Empty:
+                with self._preview_lock:
+                    encoded = self._latest_preview
+                    self._latest_preview = None
+            if encoded is None:
+                continue
             try:
                 client.sendall(encoded)
-                return True
             except OSError:
-                return False
+                return
 
     def _queue_event(self, kind: str, payload: dict[str, Any]) -> None:
         event = ServerEvent(kind=kind, payload=payload)
@@ -176,9 +239,22 @@ class PoseServer:
                     break
 
                 client.settimeout(0.5)
+                self._clear_outbound()
+                with self._pose_lock:
+                    self._initial_pose = None
+                    self._latest_pose = None
+                    self._pose_started = False
                 with self._state_lock:
                     self._client = client
                     self._client_address = (str(address[0]), int(address[1]))
+                sender = threading.Thread(
+                    target=self._sender,
+                    args=(client,),
+                    name="PocketCamFrameSender",
+                    daemon=True,
+                )
+                self._sender_thread = sender
+                sender.start()
                 self._queue_event(
                     "client_connected",
                     {"host": str(address[0]), "port": int(address[1])},
@@ -189,9 +265,15 @@ class PoseServer:
                         self._client = None
                         self._client_address = None
                 try:
+                    client.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
                     client.close()
                 except OSError:
                     pass
+                if sender.is_alive():
+                    sender.join(timeout=0.5)
                 self._queue_event("client_disconnected", {})
         except OSError as exc:
             self._queue_event("server_error", {"message": str(exc)})
@@ -243,7 +325,14 @@ class PoseServer:
         packet_type = payload.get("type")
         if packet_type == "pose":
             with self._pose_lock:
-                self._latest_pose = payload
+                if not self._pose_started:
+                    # Recenter must use a real first frame. Without this slot, a
+                    # 60 FPS phone can overwrite pose 1 before Blender's first
+                    # 10 ms timer tick, making the next pose the zero point too.
+                    self._initial_pose = payload
+                    self._pose_started = True
+                else:
+                    self._latest_pose = payload
             return
         if packet_type in {"hello", "command", "settings", "select_camera", "ping"}:
             self._queue_event(str(packet_type), payload)
