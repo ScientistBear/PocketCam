@@ -1,0 +1,18 @@
+# Xcode
+ios/*.xcodeproj/
+ios/build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Python / Blender
+__pycache__/
+*.pyc
+
+# Packages
+dist/
+*.ipa
+
+# Windows / macOS
+Thumbs.db
+.DS_Store
